@@ -24,6 +24,8 @@
 #include <functional>
 #include <string>
 
+#include "staticlib/support/windows.hpp"
+
 #include "staticlib/json.hpp"
 #include "staticlib/support.hpp"
 #include "staticlib/utils.hpp"
@@ -34,11 +36,92 @@
 #include "wilton/support/registrar.hpp"
 
 namespace wilton {
-namespace systemd {
+namespace winscm {
 
 namespace { //anonymous
 
 const std::string logger = std::string("wilton.winscm");
+
+std::string status_str(DWORD status) STATICLIB_NOEXCEPT {
+    switch (status) {
+    case SERVICE_RUNNING: return "SERVICE_RUNNING";
+    case SERVICE_START_PENDING: return "SERVICE_START_PENDING";
+    case SERVICE_STOP_PENDING: return "SERVICE_STOP_PENDING";
+    case SERVICE_STOPPED: return "SERVICE_STOPPED";
+    default: return sl::support::to_string(status);
+    }
+}
+
+bool set_service_status(SERVICE_STATUS_HANDLE ha, DWORD status) STATICLIB_NOEXCEPT {
+    SERVICE_STATUS st;
+    std::memset(std::addressof(st), '\0', sizeof(st));
+    st.dwServiceType = SERVICE_WIN32_OWN_PROCESS;
+    st.dwCurrentState = status;
+    st.dwControlsAccepted = SERVICE_ACCEPT_STOP | SERVICE_ACCEPT_SHUTDOWN;
+    st.dwWin32ExitCode = NO_ERROR;
+    st.dwServiceSpecificExitCode = 0;
+    st.dwWaitHint = 0;
+    
+    if (SERVICE_RUNNING == status || SERVICE_STOPPED == status) {
+        st.dwCheckPoint = 0;
+    } else {
+        st.dwCheckPoint = 1;
+    }
+    auto success = ::SetServiceStatus(ha, std::addressof(st));
+    if (0 == success) {
+        wilton::support::log_error(logger, std::string(
+                "Error changing status to: [" + status_str(status) + "],") +
+                " error: [" + sl::utils::errcode_to_string(::GetLastError()) + "]");
+        return false;
+    }
+    wilton::support::log_debug(logger, "SCM service status changed, value: [" + status_str(status) + "]");
+    return true;
+}
+
+DWORD WINAPI service_control_handler(DWORD step, DWORD, LPVOID, LPVOID ha_ptr) STATICLIB_NOEXCEPT {
+    auto ha = *reinterpret_cast<SERVICE_STATUS_HANDLE*>(ha_ptr);
+    switch (step) {
+    case SERVICE_CONTROL_STOP:
+    case SERVICE_CONTROL_SHUTDOWN: {
+        auto success_pending = set_service_status(ha, SERVICE_STOP_PENDING);
+        if (success_pending) {
+            auto success = set_service_status(ha, SERVICE_STOPPED);
+            (void) success;
+        }
+        break;
+    }
+    default: break;
+    }
+    return NO_ERROR;
+}
+
+void WINAPI service_main(DWORD, LPWSTR* args) STATICLIB_NOEXCEPT {
+    // The first parameter contains the number of arguments being passed to the service in the second parameter.
+    // There will always be at least one argument. The second parameter is a pointer to an array of string pointers.
+    // The first item in the array is always the service name.
+    auto name = args[0];
+    // this pointer is leaked only once on startup
+    SERVICE_STATUS_HANDLE* ha_ptr = static_cast<SERVICE_STATUS_HANDLE*>(malloc(sizeof(SERVICE_STATUS_HANDLE*)));
+    *ha_ptr = nullptr;
+
+    // register the handler function for the service
+    wilton::support::log_debug(logger, "Is due to register service control handler ...");
+    auto ha = ::RegisterServiceCtrlHandlerExW(name, service_control_handler, reinterpret_cast<LPVOID>(ha_ptr));
+    if (nullptr == ha) {
+        wilton::support::log_error(logger, std::string("Fatal error on RegisterServiceCtrlHandlerExW,") +
+                " message: [" + sl::utils::errcode_to_string(::GetLastError()) + "]");
+        return;
+    }
+    wilton::support::log_debug(logger, "Service control handler registered");
+    *ha_ptr = ha;
+    auto success_pending = set_service_status(ha, SERVICE_START_PENDING);
+    if (success_pending) {
+        auto success = set_service_status(ha, SERVICE_RUNNING);
+        if (success) {
+            wilton::support::log_info(logger, "SCM service started");
+        }
+    }
+}
 
 } // namespace
 
@@ -58,11 +141,25 @@ support::buffer start_service_control_dispatcher(sl::io::span<const char> data) 
             "Required parameter 'name' not specified"));
     const std::string& name = rname.get();
 
-    // call
+    // call SCM
     wilton::support::log_debug(logger, std::string("Is due to call SCM,") +
-            " message: [" + state + "]");
-    // todo
-    wilton::support::log_debug(logger, "Service stopped by SCM");
+            " service name: [" + name + "]");
+    auto wname = sl::utils::widen(name);
+    SERVICE_TABLE_ENTRYW st[] = {
+        { std::addressof(wname.front()), service_main },
+        { nullptr, nullptr }
+    };
+
+    // Connects the main thread of a service process to the service control 
+    // manager, which causes the thread to be the service control dispatcher 
+    // thread for the calling process. This call returns when the service has 
+    // stopped. The process should simply terminate when the call returns.
+    auto success = ::StartServiceCtrlDispatcherW(st);
+    if (0 == success) throw support::exception(TRACEMSG(
+        "Error starting service, name: [" + name + "]," +
+        " error: [" + sl::utils::errcode_to_string(::GetLastError()) + "]"));
+
+    wilton::support::log_info(logger, "SCM service stopped");
     return support::make_null_buffer();
 }
 
