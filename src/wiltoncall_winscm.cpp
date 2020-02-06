@@ -163,12 +163,82 @@ support::buffer start_service_control_dispatcher(sl::io::span<const char> data) 
     return support::make_null_buffer();
 }
 
+support::buffer misc_get_computer_name(sl::io::span<const char>) {
+    auto wbuf = std::wstring();
+    wbuf.resize(MAX_COMPUTERNAME_LENGTH + 1);
+    DWORD len = wbuf.length();
+    auto success = ::GetComputerNameW(std::addressof(wbuf.front()), std::addressof(len));
+    if (0 == success) throw support::exception(TRACEMSG(
+        "Error getting computer name," +
+        " error: [" + sl::utils::errcode_to_string(::GetLastError()) + "]"));
+    wbuf.resize(len);
+    auto res = sl::utils::narrow(wbuf);
+    return support::make_string_buffer(res);
+}
+
+support::buffer misc_show_message_box(sl::io::span<const char> data) {
+    // json parse
+    auto json = sl::json::load(data);
+    auto rcaption = std::ref(sl::utils::empty_string());
+    auto rtext = std::ref(sl::utils::empty_string());
+    auto ricon = std::ref(sl::utils::empty_string());
+    for (const sl::json::field& fi : json.as_object()) {
+        auto& name = fi.name();
+        if ("caption" == name) {
+            rcaption = fi.as_string_nonempty_or_throw(name);
+        } else if ("text" == name) {
+            rtext = fi.as_string_nonempty_or_throw(name);
+        } else if ("icon" == name) {
+            ricon = fi.as_string_nonempty_or_throw(name);
+        } else {
+            throw support::exception(TRACEMSG("Unknown data field: [" + name + "]"));
+        }
+    }
+    if (rcaption.get().empty()) throw support::exception(TRACEMSG(
+            "Required parameter 'caption' not specified"));
+    const std::string& caption = rcaption.get();
+    if (rtext.get().empty()) throw support::exception(TRACEMSG(
+            "Required parameter 'text' not specified"));
+    const std::string& text = rtext.get();
+    if (ricon.get().empty()) throw support::exception(TRACEMSG(
+            "Required parameter 'icon' not specified"));
+    const std::string& icon = ricon.get();
+
+    // call winapi
+    UINT uicon = 0;
+    if ("info" == icon) {
+        uicon = MB_ICONINFORMATION;
+    } else if ("warning" == icon) {
+        uicon = MB_ICONWARNING;
+    } else if ("error" == icon) {
+        uicon = MB_ICONERROR;
+    } else {
+        throw support::exception(TRACEMSG(
+                "Invalid unsupported icon specified, value: [" + icon + "]," +
+                " supported icons: [info, warning, error]"));
+    }
+    auto wcaption = sl::utils::widen(caption);
+    auto wtext = sl::utils::widen(text);
+    auto success = ::MessageBoxExW(
+            nullptr, // hWnd
+            wtext.c_str(), // lpText
+            wcaption.c_str(), // lpCaption
+            MB_OK | uicon, // uType
+            MAKELANGID(LANG_NEUTRAL, SUBLANG_DEFAULT)); // wLanguageId
+    if (0 == success) throw support::exception(TRACEMSG(
+        "Error showing message box," +
+        " error: [" + sl::utils::errcode_to_string(::GetLastError()) + "]"));
+    return support::make_null_buffer();
+}
+
 } // namespace
 }
 
 extern "C" char* wilton_module_init() {
     try {
         wilton::support::register_wiltoncall("winscm_start_service_control_dispatcher", wilton::winscm::start_service_control_dispatcher);
+        wilton::support::register_wiltoncall("winscm_misc_get_computer_name", wilton::winscm::misc_get_computer_name);
+        wilton::support::register_wiltoncall("winscm_misc_show_message_box", wilton::winscm::misc_show_message_box);
         return nullptr;
     } catch (const std::exception& e) {
         return wilton::support::alloc_copy(TRACEMSG(e.what() + "\nException raised"));
