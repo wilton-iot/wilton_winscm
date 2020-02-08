@@ -166,7 +166,7 @@ support::buffer start_service_control_dispatcher(sl::io::span<const char> data) 
 support::buffer misc_get_computer_name(sl::io::span<const char>) {
     auto wbuf = std::wstring();
     wbuf.resize(MAX_COMPUTERNAME_LENGTH + 1);
-    DWORD len = wbuf.length();
+    DWORD len = static_cast<DWORD>(wbuf.length());
     auto success = ::GetComputerNameW(std::addressof(wbuf.front()), std::addressof(len));
     if (0 == success) throw support::exception(TRACEMSG(
         "Error getting computer name," +
