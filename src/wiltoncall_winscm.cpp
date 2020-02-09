@@ -196,12 +196,12 @@ support::buffer misc_show_message_box(sl::io::span<const char> data) {
     }
     if (rcaption.get().empty()) throw support::exception(TRACEMSG(
             "Required parameter 'caption' not specified"));
-    const std::string& caption = rcaption.get();
     if (rtext.get().empty()) throw support::exception(TRACEMSG(
             "Required parameter 'text' not specified"));
-    const std::string& text = rtext.get();
     if (ricon.get().empty()) throw support::exception(TRACEMSG(
             "Required parameter 'icon' not specified"));
+    const std::string& caption = rcaption.get();
+    const std::string& text = rtext.get();
     const std::string& icon = ricon.get();
 
     // call winapi
