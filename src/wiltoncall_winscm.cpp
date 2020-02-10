@@ -163,19 +163,6 @@ support::buffer start_service_control_dispatcher(sl::io::span<const char> data) 
     return support::make_null_buffer();
 }
 
-support::buffer misc_get_computer_name(sl::io::span<const char>) {
-    auto wbuf = std::wstring();
-    wbuf.resize(MAX_COMPUTERNAME_LENGTH + 1);
-    DWORD len = static_cast<DWORD>(wbuf.length());
-    auto success = ::GetComputerNameW(std::addressof(wbuf.front()), std::addressof(len));
-    if (0 == success) throw support::exception(TRACEMSG(
-        "Error getting computer name," +
-        " error: [" + sl::utils::errcode_to_string(::GetLastError()) + "]"));
-    wbuf.resize(len);
-    auto res = sl::utils::narrow(wbuf);
-    return support::make_string_buffer(res);
-}
-
 support::buffer misc_show_message_box(sl::io::span<const char> data) {
     // json parse
     auto json = sl::json::load(data);
@@ -237,7 +224,6 @@ support::buffer misc_show_message_box(sl::io::span<const char> data) {
 extern "C" char* wilton_module_init() {
     try {
         wilton::support::register_wiltoncall("winscm_start_service_control_dispatcher", wilton::winscm::start_service_control_dispatcher);
-        wilton::support::register_wiltoncall("winscm_misc_get_computer_name", wilton::winscm::misc_get_computer_name);
         wilton::support::register_wiltoncall("winscm_misc_show_message_box", wilton::winscm::misc_show_message_box);
         return nullptr;
     } catch (const std::exception& e) {
